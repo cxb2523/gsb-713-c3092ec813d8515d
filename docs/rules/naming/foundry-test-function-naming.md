@@ -1,0 +1,79 @@
+---
+warning:     "This is a dynamically generated file. Do not edit manually."
+layout:      "default"
+title:       "foundry-test-function-naming | Solhint"
+---
+
+# foundry-test-function-naming
+![Category Badge](https://img.shields.io/badge/-Style%20Guide%20Rules-informational)
+![Default Severity Badge warn](https://img.shields.io/badge/Default%20Severity-warn-yellow)
+
+## Description
+Enforce naming convention on functions for Foundry test cases
+
+## Options
+This rule accepts an array of options:
+
+| Index | Description                                           | Default Value |
+| ----- | ----------------------------------------------------- | ------------- |
+| 0     | Rule severity. Must be one of "error", "warn", "off". | warn          |
+| 1     | Array of required Foundry test hook function names.   | setUp         |
+
+
+### Example Config
+```json
+{
+  "rules": {
+    "foundry-test-function-naming": [
+      "warn",
+      [
+        "setUp"
+      ]
+    ]
+  }
+}
+```
+
+### Notes
+- This rule can be configured to skip certain function names in the SKIP array. In Example Config. ```setUp``` function will be skipped
+- Supported Regex: ```test(Fork)?(Fuzz)?(Fail)?_(Revert(If_|When_){1})?\w{1,}```
+- This rule should be executed in a separate folder with a separate .solhint.json => ```solhint --config .solhint.json testFolder/**/*.sol```
+- This rule applies only to `external` and `public` functions
+- This rule skips the `setUp()` function by default
+
+## Examples
+### 👍 Examples of **correct** code for this rule
+
+#### Foundry test case with correct Function declaration
+
+```solidity
+function test_NumberIs42() public {}
+```
+
+#### Foundry test case with correct Function declaration
+
+```solidity
+function testFail_Subtract43() public {}
+```
+
+#### Foundry test case with correct Function declaration
+
+```solidity
+function testFuzz_FuzzyTest() public {}
+```
+
+### 👎 Examples of **incorrect** code for this rule
+
+#### Foundry test case with incorrect Function declaration
+
+```solidity
+function numberIs42() public {}
+```
+
+## Version
+This rule was introduced in [Solhint 6.0.2](https://github.com/protofire/solhint/blob/v6.0.2)
+
+## Resources
+- [Rule source](https://github.com/protofire/solhint/blob/master/lib/rules/naming/foundry-test-function-naming.js)
+- [Document source](https://github.com/protofire/solhint/blob/master/docs/rules/naming/foundry-test-function-naming.md)
+- [Test cases](https://github.com/protofire/solhint/blob/master/test/rules/naming/foundry-test-function-naming.js)

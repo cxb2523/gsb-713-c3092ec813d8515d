@@ -1,0 +1,26 @@
+# ignore all node_modules by default
+node_modules/
+.claude/
+.codex/
+
+/.idea/
+test2.sol
+convertLib.sol
+/.nyc_output/
+/coverage/
+/docs/_site/
+/docs/Gemfile*
+/docs/.sass-cache/
+_temp/
+*solhintReport*.*
+.env
+**/.DS_Store
+solhint*.tgz
+
+# Exception on E2E fixtures' node_modules (they are part of the test data)
+# only allow useful test files in those node_modules
+!e2e/**/node_modules/**/*.js
+!e2e/**/node_modules/**/*.json
+
+# allow test plugins inside e2e fixtures
+!e2e/15-plugins/**

@@ -1,0 +1,7 @@
+{
+  "extends": "solhint:all",
+  "rules": {
+    "use-natspec": "off",
+    "no-unused-private-funcs": "off"
+  }
+}

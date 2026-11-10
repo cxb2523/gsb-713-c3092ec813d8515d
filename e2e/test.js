@@ -1,0 +1,758 @@
+const { expect } = require('chai')
+const cp = require('child_process')
+const fs = require('fs')
+const getStream = require('get-stream')
+const os = require('os')
+const path = require('path')
+const shell = require('shelljs')
+
+const EXIT_CODES = { BAD_OPTIONS: 255, OK: 0, REPORTED_ERRORS: 1 }
+const POSTER = "Smart contract Audits by"
+
+describe('e2e general tests', function () {
+  describe('no config', function () {
+    const PATH = '01-no-config'
+    useFixture(PATH)
+
+    it('should fail when config file does not exists', function () {
+      const { code, stderr } = shell.exec(`solhint Foo.sol -c ./no-config/.solhint.json`)
+
+      expect(code).to.equal(EXIT_CODES.BAD_OPTIONS)
+      expect(stderr).to.include("couldn't be found")
+    })
+
+    it('should create an initial config with --init', function () {
+      const solhintConfigPath = path.join(this.testDirPath, '.solhint.json')
+      expect(fs.existsSync(solhintConfigPath)).to.be.false
+
+      const { code } = shell.exec(`solhint --init`)
+
+      expect(code).to.equal(EXIT_CODES.OK)
+      expect(fs.existsSync(solhintConfigPath)).to.be.true
+    })
+
+    it('should print usage if called without arguments', function () {
+      const { code, stdout } = shell.exec(`solhint`)
+
+      expect(code).to.equal(EXIT_CODES.OK)
+      expect(stdout).to.include('Usage: solhint [options]')
+      expect(stdout).to.include('Linter for Solidity programming language')
+      expect(stdout).to.include('linting of source code data provided to STDIN')
+    })
+  })
+
+  describe('empty-config', function () {
+    const PATH = '02-empty-solhint-json'
+    useFixture(PATH)
+
+    it('should print nothing', function () {
+      const { code, stdout } = shell.exec(`solhint Foo.sol`)
+
+      expect(code).to.equal(EXIT_CODES.OK)
+      expect(stdout.trim()).to.equal('')
+    })
+
+    it('should show warning when using --init', function () {
+      const { code, stderr } = shell.exec(`solhint --init`)
+
+      expect(code).to.equal(EXIT_CODES.BAD_OPTIONS)
+      expect(stderr).to.include('Configuration file already exists')
+    })
+  })
+
+  describe('no-empty-blocks', function () {
+    const PATH = '03-no-empty-blocks'
+    useFixture(PATH)
+
+    it('No contracts to lint should fail with appropriate message', function () {
+      const { code, stderr } = shell.exec(`solhint Foo1.sol`)
+
+      expect(code).to.equal(EXIT_CODES.BAD_OPTIONS)
+      expect(stderr).to.include('No files to lint!')
+    })
+
+    it('should end with REPORTED_ERRORS = 1 because report contains errors', function () {
+      const { code, stdout } = shell.exec(`solhint Foo.sol`)
+
+      expect(code).to.equal(EXIT_CODES.REPORTED_ERRORS)
+      expect(stdout.trim()).to.contain('Code contains empty blocks')
+      expect(stdout.trim()).to.contain(POSTER)
+    })
+
+    it('should end with REPORTED_ERRORS = 1 and no Poster to join Discord', function () {
+      const { code, stdout } = shell.exec(`solhint --noPoster Foo.sol`)
+
+      expect(code).to.equal(EXIT_CODES.REPORTED_ERRORS)
+      expect(stdout.trim()).to.contain('Code contains empty blocks')
+      expect(stdout.trim()).to.not.contain(POSTER)
+    })
+
+    it('should work with stdin, exit 0, found 1 error', async function () {
+      const child = cp.exec(`solhint stdin Foo.sol`)
+
+      const stdoutPromise = getStream(child.stdout)
+
+      const codePromise = new Promise((resolve) => {
+        child.on('close', (code) => {
+          resolve(code)
+        })
+      })
+
+      child.stdin.write('contract Foo {}')
+      child.stdin.end()
+
+      const code = await codePromise
+      const stdout = await stdoutPromise
+
+      expect(code).to.equal(EXIT_CODES.REPORTED_ERRORS)
+      expect(stdout.trim()).to.contain('Code contains empty blocks')
+    })
+  })
+
+  describe('.sol on path', function () {
+    const PATH = '04-dotSol-on-path'
+    useFixture(PATH)
+
+    it('should handle directory names that end with .sol', function () {
+      const { code } = shell.exec(`solhint contracts/**/*.sol`)
+      expect(code).to.equal(EXIT_CODES.OK)
+    })
+  })
+
+  describe('--max-warnings parameter tests', function () {
+    const PATH = '05-max-warnings'
+    useFixture(PATH)
+
+    // Foo contract has 6 warnings
+    // Foo2 contract has 1 error and 14 warnings
+    const warningExceededMsg = 'Solhint found more warnings than the maximum specified'
+    const errorFound =
+      'Error/s found on rules! [max-warnings] param is ignored. Fixing errors enables max-warnings'
+
+    it('should not display [warnings exceeded] for max 7 warnings', function () {
+      const { code, stdout } = shell.exec(`solhint contracts/Foo.sol --max-warnings 7`)
+      expect(code).to.equal(EXIT_CODES.OK)
+      expect(stdout.trim()).to.not.contain(warningExceededMsg)
+    })
+
+    it('should display [warnings exceeded] for max 3 warnings and exit with 1', function () {
+      const { code, stdout } = shell.exec(`solhint contracts/Foo.sol --max-warnings 3`)
+
+      expect(code).to.equal(EXIT_CODES.REPORTED_ERRORS)
+      expect(stdout.trim()).to.contain(warningExceededMsg)
+    })
+
+    it('should return error for Compiler version rule, ignoring 3 --max-warnings', function () {
+      const { code, stdout } = shell.exec(`solhint contracts/Foo2.sol --max-warnings 3`)
+
+      expect(code).to.equal(EXIT_CODES.REPORTED_ERRORS)
+      expect(stdout.trim()).to.contain(errorFound)
+    })
+
+    it('should return error for Compiler version rule. No message for max-warnings', function () {
+      const { code, stdout } = shell.exec(`solhint contracts/Foo2.sol --max-warnings 27`)
+      expect(code).to.equal(EXIT_CODES.REPORTED_ERRORS)
+      expect(stdout.trim()).to.not.contain(errorFound)
+    })
+
+    it('should NOT display warnings nor error but exit with 1 because max is 3 warnings', function () {
+      const { code } = shell.exec(`solhint contracts/Foo.sol --max-warnings 3 -q`)
+
+      expect(code).to.equal(EXIT_CODES.REPORTED_ERRORS)
+    })
+
+    it('should exit with code 1 if one of evaluated contracts contains errors', function () {
+      const { code } = shell.exec(`solhint contracts/Foo.sol contracts/Foo2.sol`)
+
+      expect(code).to.equal(EXIT_CODES.REPORTED_ERRORS)
+    })
+  })
+
+  describe('foundry-test-functions with shell', () => {
+    const PATH = '07-foundry-test'
+    useFixture(PATH)
+
+    // Foo contract has 1 warning
+    // FooTest contract has 1 error
+
+    it(`should raise error for empty blocks only`, () => {
+      const { code, stdout } = shell.exec(`solhint contracts/Foo.sol`)
+
+      expect(code).to.equal(EXIT_CODES.OK)
+      expect(stdout.trim()).to.contain('Code contains empty blocks')
+    })
+
+    it(`should raise error for wrongFunctionDefinitionName() only`, () => {
+      const SUFFIX2 = `-c test/.solhint.json --disc`
+
+      const { code, stdout } = shell.exec(`solhint test/FooTest.sol ${SUFFIX2}`)
+
+      expect(code).to.equal(EXIT_CODES.REPORTED_ERRORS)
+      expect(stdout.trim()).to.contain(
+        'Function wrongFunctionDefinitionName() must match Foundry test naming convention '
+      )
+    })
+  })
+
+  describe('import-path-check', () => {
+    const PATH = '10-import-path-check/filesystem'
+
+    let folderCounter = 1
+
+    beforeEach(() => {
+      const padded = String(folderCounter).padStart(2, '0')
+
+      const ROOT = PATH + padded + '/'
+      useFixtureFolder(this, ROOT + 'project')
+
+      folderCounter++
+    })
+
+    it('Should succeed when relative import (same folder) - filesystem01', () => {
+      const { code, stdout } = shell.exec(
+        `solhint --noPoster -c ".solhintS01.json" "./contracts/Test.sol"`
+      )
+
+      expect(code).to.equal(EXIT_CODES.OK)
+      expect(stdout.trim()).to.be.empty
+    })
+
+    it('Should succeed when relative import with parent folder - filesystem02', () => {
+      const { code, stdout } = shell.exec(
+        `solhint --noPoster -c ".solhintS02.json" "./contracts/Test.sol"`
+      )
+
+      expect(code).to.equal(EXIT_CODES.OK)
+      expect(stdout.trim()).to.be.empty
+    })
+
+    it('Should succeed when importing from node_modules - filesystem03', () => {
+      const fileName = 'node_modules/@openzeppelin/contracts/token/ERC20/ERC20.sol'
+      createDummyFile(fileName)
+
+      const { code, stdout } = shell.exec(
+        `solhint --noPoster -c ".solhintS03.json" "./contracts/Test.sol"`
+      )
+
+      expect(code).to.equal(EXIT_CODES.OK)
+      expect(stdout.trim()).to.be.empty
+    })
+
+    it('Should fail when missing import (relative path) - filesystem04', () => {
+      const { code, stdout } = shell.exec(
+        `solhint --noPoster -c ".solhintF04.json" "./contracts/Test.sol"`
+      )
+
+      expect(code).to.equal(EXIT_CODES.REPORTED_ERRORS)
+
+      const expectedPath = path.join('contracts', 'Test.sol')
+      expect(stdout).to.include(`Import in ${expectedPath} doesn't exist in: ./Missing.sol`)
+    })
+  })
+
+  describe('config-hierarchy-test', () => {
+    const PATH = '11-multiple-configs'
+    const ERROR_CONSOLE = 'Unexpected console statement'
+    const ERROR_QUOTES = 'quotes for string literals'
+    const ERROR_EMPTY_BLOCKS = 'Code contains empty blocks'
+
+    useFixture(PATH)
+
+    it(`should inherit no-console rule from root and add contract folder config rules`, () => {
+      const { code, stdout } = shell.exec(`solhint contracts/RootAndContractRules.sol`)
+
+      expect(code).to.equal(EXIT_CODES.REPORTED_ERRORS)
+      expect(stdout.trim()).to.contain(ERROR_CONSOLE)
+      expect(stdout.trim()).to.contain(ERROR_QUOTES)
+    })
+
+    it(`should inherit both rules from root `, () => {
+      const { code, stdout } = shell.exec(`solhint src/RootRules.sol`)
+
+      expect(code).to.equal(EXIT_CODES.REPORTED_ERRORS)
+      expect(stdout.trim()).to.contain(ERROR_CONSOLE)
+      expect(stdout.trim()).to.contain(ERROR_QUOTES)
+    })
+
+    it(`should override no console and quotes rules`, () => {
+      const { code, stdout } = shell.exec(`solhint src/interfaces/InterfaceRules.sol`)
+
+      expect(code).to.equal(EXIT_CODES.REPORTED_ERRORS)
+      expect(stdout.trim()).to.contain(ERROR_EMPTY_BLOCKS)
+      expect(stdout.trim()).to.not.contain(ERROR_CONSOLE)
+      expect(stdout.trim()).to.not.contain(ERROR_QUOTES)
+    })
+  })
+
+  describe('cache support', () => {
+    const PATH = '12-cache-support'
+    let cacheFilePath
+
+    useFixture(PATH)
+
+    beforeEach(() => {
+      cacheFilePath = path.join('node_modules', '.cache', 'solhint', '.solhintcache.json')
+      if (fs.existsSync(cacheFilePath)) fs.unlinkSync(cacheFilePath)
+    })
+
+    it('should create cache file and lint normally on first run', () => {
+      const { code, stdout } = shell.exec(`solhint Foo.sol --cache --noPoster`)
+      expect(fs.existsSync(cacheFilePath)).to.be.true
+
+      const cache = JSON.parse(fs.readFileSync(cacheFilePath, 'utf8'))
+
+      expect(stdout.trim()).to.equal('')
+      expect(code).to.equal(EXIT_CODES.OK)
+      expect(Object.keys(cache).length).to.equal(1)
+    })
+
+    it('should skip linting on second run if file unchanged', () => {
+      shell.exec(`solhint Foo.sol --cache --noPoster`) // populate cache
+
+      const cacheBefore = JSON.parse(fs.readFileSync(cacheFilePath, 'utf8'))
+
+      const { code, stdout } = shell.exec(`solhint Foo.sol --cache --noPoster`)
+
+      const cacheAfter = JSON.parse(fs.readFileSync(cacheFilePath, 'utf8'))
+
+      expect(code).to.equal(EXIT_CODES.OK)
+      expect(stdout.trim()).to.equal('')
+      expect(cacheAfter).to.deep.equal(cacheBefore)
+    })
+
+    it('should fix cached warnings when fix mode is enabled', () => {
+      writeJsonFile('.solhint.json', { rules: { 'contract-name-capwords': 'warn' } })
+      const source = 'pragma solidity ^0.8.24;\ncontract foo {}\n'
+      fs.writeFileSync('Foo.sol', source)
+
+      const first = shell.exec('solhint Foo.sol --cache --noPoster --disc')
+
+      expect(first.code).to.equal(EXIT_CODES.OK)
+      expect(first.stdout).to.contain('contract-name-capwords')
+      expect(fs.readFileSync('Foo.sol', 'utf8')).to.equal(source)
+      expect(Object.keys(JSON.parse(fs.readFileSync(cacheFilePath, 'utf8')))).to.have.lengthOf(1)
+
+      const second = shell.exec('solhint Foo.sol --cache --fix --noPrompt --noPoster --disc')
+
+      expect(second.code).to.equal(EXIT_CODES.OK)
+      expect(fs.readFileSync('Foo.sol', 'utf8')).to.equal(source.replace('contract foo', 'contract Foo'))
+
+      const third = shell.exec('solhint Foo.sol --cache --fix --noPrompt --noPoster --disc')
+
+      expect(third.code).to.equal(EXIT_CODES.OK)
+      expect(third.stdout.trim()).to.equal('')
+    })
+
+    it('should re-lint if file content changes', () => {
+      let code
+      let stdout
+      // first run no error, populate cache
+      shell.exec(`solhint Foo.sol --cache --noPoster`) // first run
+
+      // replace file with an error one
+      const cacheBefore = JSON.parse(fs.readFileSync(cacheFilePath, 'utf8'))
+      fs.copyFileSync('FooError.sol', 'Foo.sol') // overwrite Foo.sol
+
+      // check cache was not updated yet
+      const cacheMid = JSON.parse(fs.readFileSync(cacheFilePath, 'utf8'))
+      expect(cacheMid).to.deep.equal(cacheBefore, 'error cache mid')
+
+      // cache will not be updated because now Foo.sol has an error
+      let result = shell.exec(`solhint Foo.sol --cache --noPoster`)
+      code = result.code
+      stdout = result.stdout
+      const cacheAfter1 = JSON.parse(fs.readFileSync(cacheFilePath, 'utf8'))
+
+      // assert the errors
+      expect(code).to.equal(EXIT_CODES.REPORTED_ERRORS)
+      expect(stdout.trim()).to.contain('Compiler version')
+      expect(cacheAfter1).to.deep.equal(cacheBefore, 'error cacheAfter1')
+
+      // now replace Foo.sol with a valid file
+      fs.copyFileSync('FooValid.sol', 'Foo.sol') // restore Foo.sol
+      result = shell.exec(`solhint Foo.sol --cache --noPoster`)
+      code = result.code
+      stdout = result.stdout
+      const cacheAfter2 = JSON.parse(fs.readFileSync(cacheFilePath, 'utf8'))
+
+      // expect no errors and cache to be updated
+      expect(code).to.equal(EXIT_CODES.OK, '')
+      expect(stdout.trim()).to.equal('')
+      expect(cacheAfter2).to.not.deep.equal(cacheBefore, 'error cacheAfter2')
+    })
+  })
+
+  describe('solhintignore-check', () => {
+    const PATH = '13-solhintignore-check/filesystem'
+    const ERROR_EMPTY_BLOCKS = 'Code contains empty blocks'
+    const ERROR_IMMUTABLE = 'Immutable variables names are set to be in mixedCase'
+
+    let folderCounter = 1
+
+    beforeEach(() => {
+      const padded = String(folderCounter).padStart(2, '0')
+
+      const ROOT = PATH + padded + '/'
+      useFixtureFolder(this, ROOT + 'project')
+
+      folderCounter++
+    })
+
+    it('should exclude a .solhintignore declared file and include the other in same folder - filesystem01', () => {
+      const { code, stdout } = shell.exec(
+        `solhint --noPoster -c ".solhintS01.json" "contracts/*.sol"`
+      )
+
+      expect(code).to.equal(EXIT_CODES.REPORTED_ERRORS)
+      expect(stdout.trim()).to.contain(ERROR_EMPTY_BLOCKS)
+      expect(stdout.trim()).to.contain('Lib.sol')
+
+      expect(stdout.trim()).to.not.contain(ERROR_IMMUTABLE)
+      expect(stdout.trim()).to.not.contain('Skip.sol')
+    })
+
+    it('should exclude files inside ignored folder and include the other in other folder - filesystem02', () => {
+      const { code, stdout } = shell.exec(
+        `solhint --noPoster -c ".solhintS02.json" "contracts/**/*.sol"`
+      )
+
+      expect(code).to.equal(EXIT_CODES.REPORTED_ERRORS)
+      expect(stdout.trim()).to.contain(ERROR_EMPTY_BLOCKS)
+      expect(stdout.trim()).to.contain('Lib.sol')
+
+      expect(stdout.trim()).to.not.contain(ERROR_IMMUTABLE)
+      expect(stdout.trim()).to.not.contain('Skip1.sol')
+      expect(stdout.trim()).to.not.contain('Skip2.sol')
+    })
+
+    it('should ignore all folder except the one with ! pattern - filesystem03', () => {
+      const { code, stdout } = shell.exec(
+        `solhint --noPoster -c ".solhintS03.json" "contracts/*.sol"`
+      )
+
+      expect(code).to.equal(EXIT_CODES.REPORTED_ERRORS)
+      expect(stdout.trim()).to.contain(ERROR_EMPTY_BLOCKS)
+      expect(stdout.trim()).to.contain('Lib.sol')
+
+      expect(stdout.trim()).to.not.contain(ERROR_IMMUTABLE)
+      expect(stdout.trim()).to.not.contain('Skip.sol')
+    })
+
+    it('should ignore all files - filesystem04', () => {
+      const { code, stderr } = shell.exec(
+        `solhint --noPoster -c ".solhintS04.json" "contracts/*.sol"`
+      )
+
+      expect(code).to.equal(EXIT_CODES.BAD_OPTIONS)
+      expect(stderr.trim()).to.contain('No files to lint!')
+    })
+
+    it('should ignore all files in contracts except the ones in the desired (child) folder - filesystem05', () => {
+      const { code, stdout } = shell.exec(
+        `solhint --noPoster -c ".solhintS05.json" "contracts/**/*.sol"`
+      )
+
+      expect(code).to.equal(EXIT_CODES.REPORTED_ERRORS)
+      expect(stdout.trim()).to.contain('ERC20A.sol')
+      expect(stdout.trim()).to.contain('ERC20B.sol')
+
+      expect(stdout.trim()).to.not.contain('ERC20Permit.sol')
+      expect(stdout.trim()).to.not.contain('Nft.sol')
+      expect(stdout.trim()).to.not.contain('Lib1.sol')
+      expect(stdout.trim()).to.not.contain('Lib2.sol')
+      expect(stdout.trim()).to.not.contain('Skip.sol')
+      expect(stdout.trim()).to.not.contain(ERROR_EMPTY_BLOCKS)
+    })
+
+    it('should fail on invalid path - filesystem06', () => {
+      const { code, stderr } = shell.exec(
+        `solhint --noPoster --ignore-path ".wrongFile" -c ".solhintS06.json" "contracts/**/*.sol"`
+      )
+
+      expect(code).to.equal(EXIT_CODES.BAD_OPTIONS)
+      expect(stderr.trim()).to.contain('ERROR: .wrongFile is not a valid path.')
+    })
+
+    it('should redirect ignore file to specified option and expect same result as filesystem03  - filesystem07', () => {
+      const { code, stdout } = shell.exec(
+        `solhint --noPoster --ignore-path ".ignoresolhint" -c ".solhintS07.json" "contracts/**/*.sol"`
+      )
+
+      expect(code).to.equal(EXIT_CODES.REPORTED_ERRORS)
+      expect(stdout.trim()).to.contain(ERROR_EMPTY_BLOCKS)
+      expect(stdout.trim()).to.contain('Lib.sol')
+
+      expect(stdout.trim()).to.not.contain(ERROR_IMMUTABLE)
+      expect(stdout.trim()).to.not.contain('Skip.sol')
+    })
+  })
+
+  describe('shareable configs', function () {
+    const PATH = '14-shareable-config/filesystem'
+    let folderCounter = 1
+
+    beforeEach(() => {
+      const padded = String(folderCounter).padStart(2, '0')
+
+      const ROOT = PATH + padded + '/'
+      useFixtureFolder(this, ROOT + 'project')
+
+      folderCounter++
+    })
+
+    it('should load scoped shareable config via extends - fs1', () => {
+      const { code, stdout } = shell.exec(`solhint contracts/EmptyBlocks.sol`)
+
+      expect(code).to.equal(EXIT_CODES.REPORTED_ERRORS)
+      expect(stdout).to.include('no-empty-blocks')
+    })
+
+    it('should report when hierarchical config + extends (deepest directory with highest precedence 1) - fs2', () => {
+      //   applies deepest directory config with highest precedence (A.sol uses contracts/.solhint.json)
+      const { code, stdout } = shell.exec(`solhint contracts/A.sol`)
+      expect(code).to.equal(EXIT_CODES.REPORTED_ERRORS)
+      expect(stdout).to.include('max-line-length')
+      expect(stdout).to.include('no-empty-blocks')
+    })
+
+    it('should report when hierarchical config + extends (deepest directory with highest precedence 2) - fs3', () => {
+      // applies deepest directory config with highest precedence (B.sol uses contracts/deep/.solhint.json)
+      const { code, stdout } = shell.exec(`solhint contracts/deep/B.sol`)
+
+      expect(code).to.equal(EXIT_CODES.REPORTED_ERRORS)
+      expect(stdout).to.include('max-line-length')
+      expect(stdout).to.not.include('no-empty-blocks')
+    })
+
+    it('should validate later extends has higher priority (a then b => error)', () => {
+      const { code, stdout } = shell.exec(`solhint contracts/EmptyBlocks.sol - fs4`)
+
+      expect(code).to.equal(EXIT_CODES.REPORTED_ERRORS)
+      expect(stdout).to.include('no-empty-blocks')
+    })
+
+    it('should  override local to contract config over extends in node modules', () => {
+      const { code, stdout } = shell.exec(`solhint contracts/EmptyBlocks.sol - fs5`)
+
+      expect(code).to.equal(EXIT_CODES.OK)
+      expect(stdout).to.not.include('no-empty-blocks')
+    })
+
+    it('should load scoped shareable config via full package name (@scope/solhint-config-*) - fs6', () => {
+      const { code, stdout } = shell.exec(`solhint contracts/EmptyBlocks.sol`)
+
+      // because it is configured as warning in the shareable config
+      expect(code).to.equal(EXIT_CODES.OK)
+      expect(stdout).to.include('no-empty-blocks')
+      expect(stdout).to.include('warning')
+    })
+
+    it('should accept explicit unscoped full package name (no double-prefix) - fs7', () => {
+      const { code, stdout } = shell.exec(`solhint contracts/EmptyBlocks.sol`)
+
+      expect(code).to.equal(EXIT_CODES.REPORTED_ERRORS)
+      expect(stdout).to.include('no-empty-blocks')
+    })
+
+    it('should reject malformed scoped extends (@scope/name/extra) - fs8', () => {
+      const { code, stdout, stderr } = shell.exec(`solhint contracts/EmptyBlocks.sol`)
+
+      expect(code).to.equal(EXIT_CODES.BAD_OPTIONS)
+      expect(stderr + stdout).to.include('Failed to load config "@test/demo/extra"')
+    })
+  })
+
+  describe('plugins', function () {
+    const PATH = '15-plugins'
+
+    useFixture(PATH)
+
+    it('should load plugin from local node_modules', function () {
+      writeJsonFile('.solhint.local-plugin.json', {
+        plugins: ['local'],
+        rules: {
+          'local/local-rule': 'error',
+        },
+      })
+
+      const { code, stdout } = shell.exec(
+        'solhint --noPoster --disc -c .solhint.local-plugin.json Contract.sol'
+      )
+
+      expect(code).to.equal(EXIT_CODES.REPORTED_ERRORS)
+      expect(stdout).to.contain('Local plugin rule triggered')
+    })
+
+    it('should load plugin from pluginPaths (plugin under <pluginPath>/node_modules)', function () {
+      writeJsonFile('.solhint.plugin-path.json', {
+        pluginPaths: path.join(this.testDirPath, 'external-project'),
+        plugins: ['external'],
+        rules: {
+          'external/external-rule': 'error',
+        },
+      })
+
+      const { code, stdout } = shell.exec(
+        'solhint --noPoster --disc -c .solhint.plugin-path.json Contract.sol'
+      )
+
+      expect(code).to.equal(EXIT_CODES.REPORTED_ERRORS)
+      expect(stdout).to.contain('External plugin rule triggered')
+    })
+
+    it('should support multiple pluginPaths and load plugins from both', function () {
+      writeJsonFile('.solhint.multiple-plugin-paths.json', {
+        pluginPaths: [
+          path.join(this.testDirPath, 'path-one'),
+          path.join(this.testDirPath, 'path-two'),
+        ],
+        plugins: ['multi-one', 'multi-two'],
+        rules: {
+          'multi-one/multi-one-rule': 'error',
+          'multi-two/multi-two-rule': 'error',
+        },
+      })
+
+      const { code, stdout } = shell.exec(
+        'solhint --noPoster --disc -c .solhint.multiple-plugin-paths.json Contract.sol'
+      )
+
+      expect(code).to.equal(EXIT_CODES.REPORTED_ERRORS)
+      expect(stdout).to.contain('Multi one plugin rule triggered')
+      expect(stdout).to.contain('Multi two plugin rule triggered')
+    })
+
+    it('should continue linting when one plugin is missing and still run core + valid plugin rules', function () {
+      writeJsonFile('.solhint.plugin-missing.json', {
+        plugins: ['missing-plugin-206', 'local'],
+        rules: {
+          'compiler-version': 'error',
+          'local/local-rule': 'error',
+        },
+      })
+
+      const { code, stdout, stderr } = shell.exec(
+        'solhint --noPoster --disc -c .solhint.plugin-missing.json Contract.sol'
+      )
+
+      expect(code).to.equal(EXIT_CODES.REPORTED_ERRORS)
+      expect(stdout).to.contain('Local plugin rule triggered')
+      expect(stdout).to.contain('Compiler version')
+      expect(stderr + stdout).to.contain('Could not load solhint-plugin-missing-plugin-206')
+    })
+
+it('should load plugin rules from an extended shareable config', function () {
+      fs.mkdirSync('node_modules/@test/solhint-config-demo-plugin-local', { recursive: true })
+      fs.writeFileSync(
+        'node_modules/@test/solhint-config-demo-plugin-local/index.js',
+        `module.exports = {
+          plugins: ['local'],
+          rules: {
+            'local/local-rule': 'error',
+          },
+        }
+        `
+      )
+
+      writeJsonFile('.solhint.extends-local-plugin.json', {
+        extends: ['@test/demo-plugin-local'],
+      })
+
+      const { code, stdout } = shell.exec(
+        'solhint --noPoster --disc -c .solhint.extends-local-plugin.json Contract.sol'
+      )
+
+      expect(code).to.equal(EXIT_CODES.REPORTED_ERRORS)
+      expect(stdout).to.contain('Local plugin rule triggered')
+    })
+
+    it('should load plugin from pluginPaths defined in an extended shareable config', function () {
+      fs.mkdirSync('node_modules/@test/solhint-config-demo-plugin-external-path', { recursive: true })
+      fs.writeFileSync(
+        'node_modules/@test/solhint-config-demo-plugin-external-path/index.js',
+        `module.exports = {
+          pluginPaths: ['external-project'],
+          plugins: ['external'],
+          rules: {
+            'external/external-rule': 'error',
+          },
+        }
+        `
+      )
+
+      writeJsonFile('.solhint.extends-external-plugin.json', {
+        extends: ['@test/demo-plugin-external-path'],
+      })
+
+      const { code, stdout } = shell.exec(
+        'solhint --noPoster --disc -c .solhint.extends-external-plugin.json Contract.sol'
+      )
+
+      expect(code).to.equal(EXIT_CODES.REPORTED_ERRORS)
+      expect(stdout).to.contain('External plugin rule triggered')
+    })
+
+    it('should load plugin from local config when using extends shareable config', function () {
+      fs.mkdirSync('node_modules/@test/solhint-config-demo-core-only', { recursive: true })
+      fs.writeFileSync(
+        'node_modules/@test/solhint-config-demo-core-only/index.js',
+        `module.exports = {
+          rules: {
+            'compiler-version': ['error', '^0.8.24'],
+          },
+        }
+        `
+      )
+
+      writeJsonFile('.solhint.extends-plus-local-plugin.json', {
+        extends: ['@test/demo-core-only'],
+        plugins: ['local'],
+        rules: {
+          'local/local-rule': 'error',
+        },
+      })
+
+      const { code, stdout } = shell.exec(
+        'solhint --noPoster --disc -c .solhint.extends-plus-local-plugin.json Contract.sol'
+      )
+
+      expect(code).to.equal(EXIT_CODES.REPORTED_ERRORS)
+      expect(stdout).to.contain('Compiler version')
+      expect(stdout).to.contain('Local plugin rule triggered')
+    })
+  })
+})
+
+function useFixture(dir) {
+  beforeEach(`switch to ${dir}`, function () {
+    useFixtureFolder(this, dir)
+  })
+}
+
+function useFixtureFolder(ctx, dir) {
+  const fixturePath = path.join(__dirname, dir)
+
+  const tmpDirContainer = os.tmpdir()
+  const testDirPath = path.join(tmpDirContainer, `solhint-tests-${dir}`)
+
+  ctx.testDirPath = testDirPath
+
+  fs.mkdirSync(testDirPath, { recursive: true })
+  for (const entry of fs.readdirSync(testDirPath)) {
+    fs.rmSync(path.join(testDirPath, entry), { recursive: true, force: true })
+  }
+
+  fs.cpSync(fixturePath, testDirPath, { recursive: true })
+
+  shell.cd(testDirPath)
+}
+
+function writeJsonFile(filePath, data) {
+  fs.writeFileSync(filePath, JSON.stringify(data, null, 2))
+}
+
+function createDummyFile(fullFilePath, content = '// dummy file\npragma solidity ^0.8.0;') {
+  const dir = path.dirname(fullFilePath)
+  fs.mkdirSync(dir, { recursive: true })
+  fs.writeFileSync(fullFilePath, content)
+}
